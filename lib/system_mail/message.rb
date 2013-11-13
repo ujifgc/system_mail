@@ -1,41 +1,51 @@
 require 'tempfile'
-require 'digest/md5'
 require 'base64'
 
 module SystemMail
   class Message
-    EOLN = "\n"
+    SYSTEM_COMMANDS = {
+      :sendmail => '/usr/sbin/sendmail -t',
+      :base64 => 'base64',
+      :file => 'file --mime-type --mime-encoding -b',
+    }.freeze
 
     def initialize(options={})
-      %W(text html from to subject files).each do |option|
+      @text = {}
+      @to = []
+      %W(text html enriched from to subject files).each do |option|
         name = option.to_sym
         send(name, options[name])
       end
     end
 
     def deliver
+      validate
       write_headers
       write_message
-      `/usr/sbin/sendmail -t < #{message_path}`
+      `#{settings[:sendmail]} < #{message_path}`
       @message_file.unlink
+    end
+
+    def settings
+      @settings ||= SYSTEM_COMMANDS.dup
     end
 
     private
 
-    def message_path
-      @message_path ||= begin
-        @message_file = Tempfile.new('system_mail')
-        @message_file.close
-        @message_file.path
-      end
-    end
+    EOLN = "\n"
+    BASE64_SIZE = 76
+    UTF8_SIZE = 998
 
     def text(input)
-      @text = input
+      @text['text'] = input
+    end
+
+    def enriched(input)
+      @text['enriched'] = input
     end
 
     def html(input)
-      @html = input
+      @text['html'] = input
     end
 
     def from(input)
@@ -43,7 +53,7 @@ module SystemMail
     end
 
     def to(input)
-      @to = input
+      @to += Array(input)
     end
 
     def subject(input)
@@ -52,8 +62,12 @@ module SystemMail
 
     def files(input)
       Array(input).each do |file|
-        attachments << file
+        add_file file
       end
+    end
+
+    def add_file(input)
+      attachments << input
     end
 
     def attachments
@@ -75,109 +89,129 @@ module SystemMail
       end
     end
 
-    def multipart(type)
-      boundary = "#{type}_#{get_boundary}"
-      append_message do |f|
-        f.write "Content-Type: multipart/#{type}; boundary=\"#{boundary}\"" << EOLN
-      end
-      yield boundary
-      write_part boundary, true
-    end
-
-    def write_headers
-      append_message do |f|
-        f.write "From: #{@from}" << EOLN
-        f.write "To: #{@to}" << EOLN
-        f.write "Subject: =?UTF-8?B?" << Base64.strict_encode64(@subject) << "?=" << EOLN
-      end
-    end
-
     def write_body
-      if @html.nil?
-        write_text
+      case @text.length
+      when 0
+        nil
+      when 1
+        data, type = @text.first
+        write_content data, "text/#{type}"
       else
         multipart :alternative do |boundary|
-          write_part boundary
-          write_text
-          write_part boundary
-          write_html
+          %w[text enriched html].each do |type|
+            data = @text[type] || next
+            write_part boundary
+            write_content data, "text/#{type}"
+          end
         end
       end
     end
 
-    def write_part(boundary, finish = nil)
-      append_message do |f|
-        f.write EOLN
-        f.write "--#{boundary}"
-        f.write '--' if finish
-        f.write EOLN
-      end
-    end
-
-    def write_text
-      write_utf8 @text, 'text/plain'
-    end
-
-    def write_html
-      write_utf8 @html, 'text/html'
-    end
-
-    def write_utf8(data, content_type)
-      if data.lines.any?{ |l| l.bytesize > 998 }
+    def write_content(data, content_type)
+      if data.bytesize < UTF8_SIZE || !data.lines.any?{ |line| line.bytesize > UTF8_SIZE }
+        write_8bit(data, content_type)
+      else
         write_base64(data, content_type)
       end
-      append_message do |f|
-        f.write "Content-Type: #{content_type}; charset=#{data.encoding}" << EOLN
-        f.write "Content-Transfer-Encoding: 8bit" << EOLN << EOLN
-        f.write data
-        f.write EOLN
+    end
+
+    def multipart(type)
+      boundary = new_boundary(type)
+      append_message do |file|
+        file << "Content-Type: multipart/#{type}; boundary=\"#{boundary}\"" << EOLN
+      end
+      yield boundary
+      write_part boundary, :end
+    end
+
+    def write_headers
+      append_message do |file|
+        file << "From: #{@from}" << EOLN  if @from
+        file << "To: #{@to.join(', ')}" << EOLN
+        file << "Subject: #{encode_subject}" << EOLN
+      end
+    end
+
+    def write_part(boundary, type = :begin)
+      append_message do |file|
+        file << EOLN
+        file << "--#{boundary}" << (type == :end ? '--' : '') << EOLN
       end
     end
 
     def write_base64(data, content_type)
-      append_message do |f|
-        f.write "Content-Type: #{content_type}; charset=#{data.encoding}" << EOLN
-        f.write "Content-Transfer-Encoding: base64" << EOLN << EOLN
-        Base64.strict_encode64(data).each_slice(76) do |line|
-          f.write line
-          f.write EOLN
+      append_message do |file|
+        file << "Content-Type: #{content_type}; charset=#{data.encoding}" << EOLN
+        file << "Content-Transfer-Encoding: base64" << EOLN
+        file << EOLN
+        Base64.strict_encode64(data).each_slice(BASE64_SIZE) do |line|
+          file << line << EOLN
         end
+      end
+    end
+
+    def write_8bit(data, content_type)
+      append_message do |file|
+        file << "Content-Type: #{content_type}; charset=#{data.encoding}" << EOLN
+        file << "Content-Transfer-Encoding: 8bit" << EOLN
+        file << EOLN
+        file << data << EOLN
       end
     end
 
     def write_file(attachment)
-      case attachment
+      path = case attachment
       when String
-        if File.file?(attachment)
-          write_file_by_path(attachment)
-        else
-          fail Errno::ENOENT, data
-        end
+        fail Errno::ENOENT, attachment  unless File.file?(attachment)
+        fail Errno::EACCES, attachment  unless File.readable?(attachment)
+        attachment
       when File
-        write_file_by_path(attachment.path)
+        attachment.path
       else
-        fail ArgumentError
+        fail ArgumentError, 'attachment must be File or String of file path'
       end
+      write_base64_file path
     end
 
-    def write_file_by_path(path)
-      mime = `file --mime-type --mime-encoding -b '#{path}'`.strip
-      append_message do |f|
-        f.write "Content-Type: #{mime}" << EOLN
-        f.write "Content-Transfer-Encoding: base64" << EOLN
-        f.write "Content-Disposition: attachment; filename=\"#{File.basename(path)}\"" << EOLN << EOLN
+    def write_base64_file(path)
+      append_message do |file|
+        file << "Content-Type: #{read_mime(path)}" << EOLN
+        file << "Content-Transfer-Encoding: base64" << EOLN
+        file << "Content-Disposition: attachment; filename=\"#{File.basename(path)}\"" << EOLN
+        file << EOLN
       end
-      `base64 #{path} >> #{message_path}`
+      `#{settings[:base64]} '#{path}' >> #{message_path}`
+    end
+
+    def read_mime(path)
+      `#{settings[:file]} '#{path}'`.strip
+    end
+
+    def validate
+      fail ArgumentError, "Header 'To:' is empty" if @to.empty?
+      warn 'Message body is empty' if @text.empty?
+    end
+
+    def new_boundary(type)
+      rand(36**6).to_s(36).rjust(20,type.to_s)
+    end
+
+    def encode_subject
+      @subject.ascii_only? ? @subject : ("=?UTF-8?B?" << Base64.strict_encode64(@subject) << "?=")
     end
 
     def append_message
-      File.open(message_path, 'a') do |f|
-        yield f
+      File.open(message_path, 'a') do |file|
+        yield file
       end
     end
 
-    def get_boundary
-      Digest::MD5.hexdigest(rand.to_s)[0..7]
+    def message_path
+      @message_path ||= begin
+        @message_file = Tempfile.new('system_mail')
+        @message_file.close
+        @message_file.path
+      end
     end
   end
 end
