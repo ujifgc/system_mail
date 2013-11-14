@@ -3,28 +3,23 @@ require 'fileutils'
 
 module SystemMail
   class Storage
-    def initialize(path)
-      @path = path
+    def initialize(path = nil)
+      @tmpdir = path || Dir.tmpdir
       @io = StringIO.new
-      @mutex = Mutex.new
     end
 
     def write
-      @mutex.synchronize do
-        yield @io
-      end
+      yield @io
     end
 
     def capture
-      @mutex.synchronize do
-        ensure_tempfile
-        @io.close
-        yield @io.path
-        @io.open
-      end
+      ensure_tempfile
+      @io.close
+      yield @io.path
+      @io.open
     end
 
-    def done
+    def clear
       @io.close
       @io.unlink if @io.kind_of?(Tempfile)
       @io = StringIO.new
@@ -35,12 +30,12 @@ module SystemMail
     def ensure_tempfile
       return if @io.kind_of?(Tempfile)
       tempfile = create_tempfile
-      tempfile.puts @io.string
+      tempfile.puts @io.string if @io.size > 0
       @io = tempfile
     end
 
     def create_tempfile
-      temp_directory = File.join(@path, 'system_mail')
+      temp_directory = File.join(@tmpdir, 'system_mail')
       FileUtils.mkdir_p(temp_directory)
       Tempfile.new('storage', temp_directory, :mode => IO::APPEND)
     end

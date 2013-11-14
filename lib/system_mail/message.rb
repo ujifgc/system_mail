@@ -28,7 +28,7 @@ module SystemMail
       storage.capture do |message_path|
         `#{settings[:sendmail]} < #{message_path}`
       end
-      storage.done
+      storage.clear
       nil
     end
 
