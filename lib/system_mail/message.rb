@@ -2,6 +2,9 @@ require 'base64'
 require 'system_mail/storage'
 
 module SystemMail
+  ##
+  # Manages compiling an email message from various attributes and files.
+  #
   class Message
     BASE64_SIZE = 76
     UTF8_SIZE = 998
@@ -12,10 +15,24 @@ module SystemMail
       :storage => ENV['TMP'] || '/tmp',
     }.freeze
 
+    ##
+    # Creates new message. Available options:
+    #
+    # - :text, String, Textual part of the message
+    # - :enriched, String, Enriched alternative of the message (RFC 1896)
+    # - :html, String, HTML alternative of the message
+    # - :from, String, 'From:' header for the message
+    # - :to, String or Array of Strings, 'To:' header, if Arrey, it gets joined by ', '
+    # - :subject, String, Subject of the message, it gets encoded automatically
+    # - :files, File or String of file path or Array of them, Attachments of the message
+    #
+    # Options :text, :enriched and :html are interchangeable.
+    # Option :to is required.
+    #
     def initialize(options={})
       @text = {}
       @to = []
-      %W(text html enriched from to subject files).each do |option|
+      %W(text enriched html from to subject files).each do |option|
         name = option.to_sym
         send(name, options[name])
       end
