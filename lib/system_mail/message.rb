@@ -1,12 +1,15 @@
-require 'tempfile'
 require 'base64'
+require 'system_mail/storage'
 
 module SystemMail
   class Message
-    SYSTEM_COMMANDS = {
+    BASE64_SIZE = 76
+    UTF8_SIZE = 998
+    SETTINGS = {
       :sendmail => '/usr/sbin/sendmail -t',
       :base64 => 'base64',
       :file => 'file --mime-type --mime-encoding -b',
+      :storage => ENV['TMP'] || '/tmp',
     }.freeze
 
     def initialize(options={})
@@ -22,19 +25,18 @@ module SystemMail
       validate
       write_headers
       write_message
-      `#{settings[:sendmail]} < #{message_path}`
-      @message_file.unlink
+      storage.capture do |message_path|
+        `#{settings[:sendmail]} < #{message_path}`
+      end
+      storage.done
+      nil
     end
 
     def settings
-      @settings ||= SYSTEM_COMMANDS.dup
+      @settings ||= SETTINGS.dup
     end
 
     private
-
-    EOLN = "\n"
-    BASE64_SIZE = 76
-    UTF8_SIZE = 998
 
     def text(input)
       @text['text'] = input
@@ -74,6 +76,10 @@ module SystemMail
       @attachments ||= []
     end
 
+    def storage
+      @storage ||= Storage.new(settings[:storage])
+    end
+
     def write_message
       if attachments.any?
         multipart :mixed do |boundary|
@@ -109,58 +115,58 @@ module SystemMail
 
     def write_content(data, content_type)
       if data.bytesize < UTF8_SIZE || !data.lines.any?{ |line| line.bytesize > UTF8_SIZE }
-        write_8bit(data, content_type)
+        write_8bit data, content_type
       else
-        write_base64(data, content_type)
+        write_base64 data, content_type
       end
     end
 
     def multipart(type)
       boundary = new_boundary(type)
-      append_message do |file|
-        file << "Content-Type: multipart/#{type}; boundary=\"#{boundary}\"" << EOLN
+      storage.write do |io|
+        io.puts "Content-Type: multipart/#{type}; boundary=\"#{boundary}\""
       end
       yield boundary
       write_part boundary, :end
     end
 
     def write_headers
-      append_message do |file|
-        file << "From: #{@from}" << EOLN  if @from
-        file << "To: #{@to.join(', ')}" << EOLN
-        file << "Subject: #{encode_subject}" << EOLN
+      storage.write do |io|
+        io.puts "From: #{@from}"  if @from
+        io.puts "To: #{@to.join(', ')}"
+        io.puts "Subject: #{encode_subject}"
       end
     end
 
     def write_part(boundary, type = :begin)
-      append_message do |file|
-        file << EOLN
-        file << "--#{boundary}" << (type == :end ? '--' : '') << EOLN
+      storage.write do |io|
+        io.puts
+        io.puts "--#{boundary}#{type == :end ? '--' : ''}"
       end
     end
 
     def write_base64(data, content_type)
-      append_message do |file|
-        file << "Content-Type: #{content_type}; charset=#{data.encoding}" << EOLN
-        file << "Content-Transfer-Encoding: base64" << EOLN
-        file << EOLN
+      storage.write do |io|
+        io.puts "Content-Type: #{content_type}; charset=#{data.encoding}"
+        io.puts "Content-Transfer-Encoding: base64"
+        io.puts
         Base64.strict_encode64(data).each_slice(BASE64_SIZE) do |line|
-          file << line << EOLN
+          io.puts line
         end
       end
     end
 
     def write_8bit(data, content_type)
-      append_message do |file|
-        file << "Content-Type: #{content_type}; charset=#{data.encoding}" << EOLN
-        file << "Content-Transfer-Encoding: 8bit" << EOLN
-        file << EOLN
-        file << data << EOLN
+      storage.write do |io|
+        io.puts "Content-Type: #{content_type}; charset=#{data.encoding}"
+        io.puts "Content-Transfer-Encoding: 8bit"
+        io.puts
+        io.puts data
       end
     end
 
     def write_file(attachment)
-      path = case attachment
+      file_path = case attachment
       when String
         fail Errno::ENOENT, attachment  unless File.file?(attachment)
         fail Errno::EACCES, attachment  unless File.readable?(attachment)
@@ -170,21 +176,23 @@ module SystemMail
       else
         fail ArgumentError, 'attachment must be File or String of file path'
       end
-      write_base64_file path
+      write_base64_file file_path
     end
 
-    def write_base64_file(path)
-      append_message do |file|
-        file << "Content-Type: #{read_mime(path)}" << EOLN
-        file << "Content-Transfer-Encoding: base64" << EOLN
-        file << "Content-Disposition: attachment; filename=\"#{File.basename(path)}\"" << EOLN
-        file << EOLN
+    def write_base64_file(file_path)
+      storage.write do |io|
+        io.puts "Content-Type: #{read_mime(file_path)}"
+        io.puts "Content-Transfer-Encoding: base64"
+        io.puts "Content-Disposition: attachment; filename=\"#{File.basename(file_path)}\""
+        io.puts
       end
-      `#{settings[:base64]} '#{path}' >> #{message_path}`
+      storage.capture do |message_path|
+        `#{settings[:base64]} '#{file_path}' >> #{message_path}`
+      end
     end
 
-    def read_mime(path)
-      `#{settings[:file]} '#{path}'`.strip
+    def read_mime(file_path)
+      `#{settings[:file]} '#{file_path}'`.strip
     end
 
     def validate
@@ -197,21 +205,7 @@ module SystemMail
     end
 
     def encode_subject
-      @subject.ascii_only? ? @subject : ("=?UTF-8?B?" << Base64.strict_encode64(@subject) << "?=")
-    end
-
-    def append_message
-      File.open(message_path, 'a') do |file|
-        yield file
-      end
-    end
-
-    def message_path
-      @message_path ||= begin
-        @message_file = Tempfile.new('system_mail')
-        @message_file.close
-        @message_file.path
-      end
+      @subject.ascii_only? ? @subject : "=?UTF-8?B?#{Base64.strict_encode64 @subject}?="
     end
   end
 end
