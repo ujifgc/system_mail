@@ -1,6 +1,21 @@
 # SystemMail
 
-TODO: Write a gem description
+SystemMail is Ruby library built to compose and deliver internet mail using
+operating system utilities.
+
+SystemMail features:
+
+* tiny memory footprint even with big attachments
+* blazing-fast gem loading and message composing
+* alternating message body format: text, enriched, HTML
+* rich capabilities in attaching files
+* ability to combine HTML message with file attachments
+
+Operating system commands used to do the job are:
+
+* `sendmail -t < temp` or alternative sends the message to Mail Transfer Agent
+* `base64 file >> temp` encodes binary files to textual form
+* `file --mime-type --mime-encoding -b file` detects Content-Type and charset
 
 ## Installation
 
@@ -18,7 +33,14 @@ Or install it yourself as:
 
 ## Usage
 
-TODO: Write usage instructions here
+    mail = SystemMail.new(
+      from: 'user@example.com',
+      to: ['user1@gmail.com', 'user2@gmail.com'],
+      subject: 'test проверочный subject',
+      files: ['Gemfile', 'Gemfile.lock'],
+      text: 'big small норм',
+      html: File.read('test.html')
+    mail.deliver
 
 ## Contributing
 
