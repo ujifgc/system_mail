@@ -1,9 +1,9 @@
 [![Build Status](https://travis-ci.org/ujifgc/system_mail.png)](https://travis-ci.org/ujifgc/system_mail)
 [![Code Climate](https://codeclimate.com/github/ujifgc/system_mail.png)](https://codeclimate.com/github/ujifgc/system_mail)
 
-# SystemMail
+## Introduction
 
-SystemMail is Ruby library built to compose and deliver internet mail using
+SystemMail is a Ruby library built to compose and deliver internet mail using
 operating system utilities.
 
 SystemMail features:
