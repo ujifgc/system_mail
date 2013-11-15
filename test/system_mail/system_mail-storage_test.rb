@@ -1,3 +1,4 @@
+#coding:utf-8
 require 'minitest_helper'
 
 describe SystemMail::Storage do
