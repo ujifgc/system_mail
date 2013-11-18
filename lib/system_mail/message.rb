@@ -1,4 +1,5 @@
 require 'base64'
+require 'shellwords'
 require 'system_mail/storage'
 
 module SystemMail
@@ -29,24 +30,41 @@ module SystemMail
     # Options :text, :enriched and :html are interchangeable.
     # Option :to is required.
     #
+    # Examples:
+    #
+    #   mail = Message.new(
+    #     :from        => 'user@example.com',
+    #     :to          => 'user@gmail.com',
+    #     :subject     => 'test subject',
+    #     :text        => 'big small normal',
+    #     :html        => File.read('test.html'),
+    #     :attachments => [File.open('Gemfile'), 'attachment.zip'],
+    #   )
+    #
     def initialize(options={})
       @text = {}
       @to = []
-      %W(text enriched html from to subject files).each do |option|
+      @mutex = Mutex.new
+      %W(text enriched html from to subject attachments).each do |option|
         name = option.to_sym
         send(name, options[name])
       end
     end
 
+    ##
+    # Delivers the message using sendmail.
+    #
+    # Example:
+    #
+    #   mail.deliver #=> nil
+    #
     def deliver
       validate
-      write_headers
-      write_message
-      storage.capture do |message_path|
-        `#{settings[:sendmail]} < #{message_path}`
+      with_storage do
+        write_headers
+        write_message
+        send_message
       end
-      storage.clear
-      nil
     end
 
     def settings
@@ -79,32 +97,37 @@ module SystemMail
       @subject = input
     end
 
-    def files(input)
-      Array(input).each do |file|
-        add_file file
+    def attachments(input)
+      input && input.each{ |file| add_file(*file) }
+    end
+
+    def add_file(name, path = nil)
+      path ||= name
+      name = File.basename(name)
+      files[name] = path
+    end
+
+    def files
+      @files ||= {}
+    end
+
+    def with_storage
+      @mutex.synchronize do
+        @storage = Storage.new settings[:storage]
+        yield
+        @storage.clear
+        @storage = nil
       end
     end
 
-    def add_file(input)
-      attachments << input
-    end
-
-    def attachments
-      @attachments ||= []
-    end
-
-    def storage
-      @storage ||= Storage.new(settings[:storage])
-    end
-
     def write_message
-      if attachments.any?
+      if files.any?
         multipart :mixed do |boundary|
           write_part boundary
           write_body
-          attachments.each do |attachment|
+          files.each_pair do |name, path|
             write_part boundary
-            write_file attachment
+            write_file name, path
           end
         end
       else
@@ -132,84 +155,84 @@ module SystemMail
 
     def write_content(data, content_type)
       if data.bytesize < UTF8_SIZE || !data.lines.any?{ |line| line.bytesize > UTF8_SIZE }
-        write_8bit data, content_type
+        write_8bit_data data, content_type
       else
-        write_base64 data, content_type
+        write_base64_data data, content_type
       end
     end
 
     def multipart(type)
       boundary = new_boundary(type)
-      storage.write do |io|
-        io.puts "Content-Type: multipart/#{type}; boundary=\"#{boundary}\""
-      end
+      @storage.puts "Content-Type: multipart/#{type}; boundary=\"#{boundary}\""
       yield boundary
       write_part boundary, :end
     end
 
     def write_headers
-      storage.write do |io|
-        io.puts "From: #{@from}"  if @from
-        io.puts "To: #{@to.join(', ')}"
-        io.puts "Subject: #{encode_subject}"
-      end
+      @storage.puts "From: #{@from}"  if @from
+      @storage.puts "To: #{@to.join(', ')}"
+      @storage.puts "Subject: #{encode_subject}"
     end
 
     def write_part(boundary, type = :begin)
-      storage.write do |io|
-        io.puts
-        io.puts "--#{boundary}#{type == :end ? '--' : ''}"
+      @storage.puts
+      @storage.puts "--#{boundary}#{type == :end ? '--' : ''}"
+    end
+
+    def write_base64_data(data, content_type)
+      @storage.puts "Content-Type: #{content_type}; charset=#{data.encoding}"
+      @storage.puts "Content-Transfer-Encoding: base64"
+      @storage.puts
+      Base64.strict_encode64(data).each_slice(BASE64_SIZE) do |line|
+        @storage.puts line
       end
     end
 
-    def write_base64(data, content_type)
-      storage.write do |io|
-        io.puts "Content-Type: #{content_type}; charset=#{data.encoding}"
-        io.puts "Content-Transfer-Encoding: base64"
-        io.puts
-        Base64.strict_encode64(data).each_slice(BASE64_SIZE) do |line|
-          io.puts line
+    def write_8bit_data(data, content_type)
+      @storage.puts "Content-Type: #{content_type}; charset=#{data.encoding}"
+      @storage.puts "Content-Transfer-Encoding: 8bit"
+      @storage.puts
+      @storage.puts data
+    end
+
+    def write_file(name, file)
+      path = case file
+      when String
+        fail Errno::ENOENT, file  unless File.file?(file)
+        fail Errno::EACCES, file  unless File.readable?(file)
+        file
+      when File
+        file.path
+      else
+        fail ArgumentError, 'attachment must be File or String of file path'
+      end
+      write_base64_file name, path
+    end
+
+    def write_base64_file(name, path)
+      @storage.puts "Content-Type: #{read_mime(path)}"
+      @storage.puts "Content-Transfer-Encoding: base64"
+      @storage.puts "Content-Disposition: attachment; filename=\"#{name}\""
+      @storage.puts
+      @storage.capture do |message_path|
+        `#{settings[:base64]} '#{path.shellescape}' >> #{message_path}`
+      end
+    end
+
+    def send_message
+      if @storage.file?
+        @storage.capture do |message_path|
+          `#{settings[:sendmail]} < #{message_path}`
+        end
+      else
+        IO.popen(settings[:sendmail]) do |io|
+          io.write(@storage.read)
         end
       end
     end
 
-    def write_8bit(data, content_type)
-      storage.write do |io|
-        io.puts "Content-Type: #{content_type}; charset=#{data.encoding}"
-        io.puts "Content-Transfer-Encoding: 8bit"
-        io.puts
-        io.puts data
-      end
-    end
-
-    def write_file(attachment)
-      file_path = case attachment
-      when String
-        fail Errno::ENOENT, attachment  unless File.file?(attachment)
-        fail Errno::EACCES, attachment  unless File.readable?(attachment)
-        attachment
-      when File
-        attachment.path
-      else
-        fail ArgumentError, 'attachment must be File or String of file path'
-      end
-      write_base64_file file_path
-    end
-
-    def write_base64_file(file_path)
-      storage.write do |io|
-        io.puts "Content-Type: #{read_mime(file_path)}"
-        io.puts "Content-Transfer-Encoding: base64"
-        io.puts "Content-Disposition: attachment; filename=\"#{File.basename(file_path)}\""
-        io.puts
-      end
-      storage.capture do |message_path|
-        `#{settings[:base64]} '#{file_path}' >> #{message_path}`
-      end
-    end
-
     def read_mime(file_path)
-      `#{settings[:file]} '#{file_path}'`.strip
+      `#{settings[:file]} '#{file_path.shellescape}'`.strip
     end
 
     def validate

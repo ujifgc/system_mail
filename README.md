@@ -43,6 +43,7 @@ Or install it yourself as:
       files: ['Gemfile', 'Gemfile.lock'],
       text: 'big small норм',
       html: File.read('test.html')
+    )
     mail.deliver
 
 ## Contributing

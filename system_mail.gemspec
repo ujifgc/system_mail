@@ -8,9 +8,9 @@ Gem::Specification.new do |spec|
   spec.version       = SystemMail::VERSION
   spec.authors       = ["Igor Bochkariov"]
   spec.email         = ["ujifgc@gmail.com"]
-  spec.description   = %q{TODO: Write a gem description}
-  spec.summary       = %q{TODO: Write a gem summary}
-  spec.homepage      = "https//github.com/ujifgc/system_mail"
+  spec.description   = 'A Ruby library built to compose and deliver internet mail using operating system utilities.'
+  spec.summary       = 'SystemMail is a blazing-fast Ruby Mail alternative with tiny memory footprint.'
+  spec.homepage      = "https://github.com/ujifgc/system_mail"
   spec.license       = "MIT"
 
   spec.files         = `git ls-files`.split($/)

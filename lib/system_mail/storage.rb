@@ -2,14 +2,27 @@ require 'tempfile'
 require 'fileutils'
 
 module SystemMail
+  ##
+  # A class to store string data either in StringIO or in Tempfile.
+  #
   class Storage
     def initialize(path = nil)
       @tmpdir = path || Dir.tmpdir
       @io = StringIO.new
     end
 
-    def write
-      yield @io
+    def puts(data = nil)
+      @io.puts(data)
+    end
+
+    def read
+      if file?
+        capture do |file_path|
+          File.read file_path
+        end
+      else
+        @io.string.dup
+      end
     end
 
     def capture
@@ -19,16 +32,19 @@ module SystemMail
       @io.open
     end
 
+    def file?
+      @io.kind_of?(Tempfile)
+    end
+
     def clear
       @io.close
-      @io.unlink if @io.kind_of?(Tempfile)
-      @io = StringIO.new
+      @io.unlink if file?
     end
 
     private
 
     def ensure_tempfile
-      return if @io.kind_of?(Tempfile)
+      return if file?
       tempfile = create_tempfile
       tempfile.puts @io.string if @io.size > 0
       @io = tempfile
