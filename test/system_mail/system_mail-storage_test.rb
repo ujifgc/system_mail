@@ -19,11 +19,9 @@ describe SystemMail::Storage do
 
   it 'should properly write strings' do
     2.times do
-      @s.write do |io|
-        io.puts 'line1'
-        io.puts 'а также линия'
-        io.puts
-      end
+      @s.puts 'line1'
+      @s.puts 'а также линия'
+      @s.puts
     end
     assert_equal "line1\nа также линия\n\n"*2, @s.io.string
     assert_kind_of StringIO, @s.io
@@ -42,11 +40,9 @@ describe SystemMail::Storage do
 
   it 'should properly mix strings and files' do
     2.times do
-      @s.write do |io|
-        io.puts 'line1'
-        io.puts 'а также линия'
-        io.puts
-      end
+      @s.puts 'line1'
+      @s.puts 'а также линия'
+      @s.puts
       @s.capture do |path|
         File.open(path, 'a') { |f| f.write @fixture }
       end
