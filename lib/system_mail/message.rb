@@ -42,7 +42,7 @@ module SystemMail
     #   )
     #
     def initialize(options={})
-      @text = {}
+      @body = {}
       @to = []
       @mutex = Mutex.new
       %W(text enriched html from to subject attachments).each do |option|
@@ -74,15 +74,15 @@ module SystemMail
     private
 
     def text(input)
-      @text['text'] = input
+      @body['text'] = input
     end
 
     def enriched(input)
-      @text['enriched'] = input
+      @body['enriched'] = input
     end
 
     def html(input)
-      @text['html'] = input
+      @body['html'] = input
     end
 
     def from(input)
@@ -136,16 +136,16 @@ module SystemMail
     end
 
     def write_body
-      case @text.length
+      case @body.length
       when 0
         nil
       when 1
-        data, type = @text.first
+        data, type = @body.first
         write_content data, "text/#{type}"
       else
         multipart :alternative do |boundary|
           %w[text enriched html].each do |type|
-            data = @text[type] || next
+            data = @body[type] || next
             write_part boundary
             write_content data, "text/#{type}"
           end
@@ -237,7 +237,7 @@ module SystemMail
 
     def validate
       fail ArgumentError, "Header 'To:' is empty" if @to.empty?
-      warn 'Message body is empty' if @text.empty?
+      warn 'Message body is empty' if @body.empty?
     end
 
     def new_boundary(type)
