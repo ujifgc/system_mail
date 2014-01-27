@@ -225,8 +225,8 @@ module SystemMail
           `#{settings[:sendmail]} < #{message_path}`
         end
       else
-        IO.popen(settings[:sendmail]) do |io|
-          io.write(@storage.read)
+        IO.popen(settings[:sendmail], 'w') do |io|
+          io.puts @storage.read
         end
       end
     end
