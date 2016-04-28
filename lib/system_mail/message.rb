@@ -169,8 +169,8 @@ module SystemMail
     end
 
     def write_headers
-      @storage.puts "From: #{@from}"  if @from
-      @storage.puts "To: #{@to.join(', ')}"
+      @storage.puts "From: #{encode_from}"  if @from
+      @storage.puts "To: #{encode_to}"
       @storage.puts "Subject: #{encode_subject}"
     end
 
@@ -245,7 +245,33 @@ module SystemMail
     end
 
     def encode_subject
-      @subject.ascii_only? ? @subject : "=?UTF-8?B?#{Base64.strict_encode64 @subject}?="
+      @subject.ascii_only? ? @subject : encode_utf8(@subject)
+    end
+
+    def encode_from
+      encode_address(@from)
+    end
+
+    def encode_to
+      @to.map do |to|
+        encode_address(to)
+      end.join(', ')
+    end
+
+    def encode_address(address)
+      if address.ascii_only?
+        address
+      else
+        if matchdata = address.match(/(.+)\s\<(.+)\>/)
+          "#{encode_utf8 matchdata[1]} <#{matchdata[2]}>"
+        else
+          address
+        end
+      end
+    end
+
+    def encode_utf8(input)
+      "=?UTF-8?B?#{Base64.strict_encode64 input}?="
     end
   end
 end
