@@ -183,7 +183,7 @@ module SystemMail
       @storage.puts "Content-Type: #{content_type}; charset=#{data.encoding}"
       @storage.puts "Content-Transfer-Encoding: base64"
       @storage.puts
-      Base64.strict_encode64(data).each_slice(BASE64_SIZE) do |line|
+      Base64.strict_encode64(data).scan(/.{1,#{BASE64_SIZE}/).each do |line|
         @storage.puts line
       end
     end
