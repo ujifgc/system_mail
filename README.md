@@ -40,7 +40,7 @@ Or install it yourself as:
       from: 'user@example.com',
       to: ['user1@gmail.com', 'user2@gmail.com'],
       subject: 'test проверочный subject',
-      files: ['Gemfile', 'Gemfile.lock'],
+      attachments: ['Gemfile', 'Gemfile.lock'],
       text: 'big small норм',
       html: File.read('test.html')
     )
